@@ -15,7 +15,13 @@
 
 ## 使用方式
 
-這是一個**單檔網站**，不需要安裝任何東西。直接在瀏覽器打開 `index.html` 即可使用。資料儲存在瀏覽器本機（localStorage），不會上傳到任何伺服器。
+直接在瀏覽器打開 `index.html` 即可使用。預設資料儲存在瀏覽器本機（localStorage）。
+
+### Google 試算表同步
+
+1. 建立 [Google 試算表](https://sheets.google.com)，在 Apps Script 貼上 `google-apps-script/Code.gs` 並部署為「網頁應用程式」（任何人可存取）
+2. 把部署 URL **寫進** `index.html` 的 `SHEETS_API_URL` 常數
+3. 進入計劃後按 **🔗 分享** 傳給朋友——對方**不用任何設定**，打開連結即可同步（約每 4 秒自動刷新）
 
 ## 線上版
 

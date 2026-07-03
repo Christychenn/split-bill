@@ -319,6 +319,15 @@
   .footer { text-align: center; color: var(--milk-tea); font-size: 12px; margin-top: 34px; }
   .footer .heart { color: var(--berry); }
 
+  .sync-badge {
+    font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    background: #EBF2E2; color: var(--matcha-deep); white-space: nowrap;
+  }
+  .sync-badge.busy { background: #FDF3DE; color: var(--caramel-deep); }
+  .sync-badge.err { background: #F5E4E3; color: var(--berry-deep); }
+  .cloud-setup { background: #FDF8EC; border-color: #F3DCAF; }
+  .cloud-setup .ok-line { font-size: 13px; color: var(--matcha-deep); font-weight: 700; margin-top: 10px; }
+
   @media (max-width: 540px) {
     .bal .nm { width: 64px; }
     .bal .v { min-width: 88px; }
@@ -345,6 +354,10 @@
 
 /* ───────────────────────── state ───────────────────────── */
 const LS_KEY = 'butter-split-v1';
+// ← 部署 Apps Script 後，把「網頁應用程式」URL 貼在這裡（朋友不用設定，開分享連結即可）
+const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyr_akY6mF_3MrwjKJKd3cXTFQQ6k0fhbp7R6772pOYHKd-45fKyqpRW5wBbR8gI8jc/exec';
+const POLL_PLAN_MS = 4000;
+const POLL_HOME_MS = 6000;
 const CURRENCIES = [
   ['TWD','🇹🇼 台幣 TWD'], ['JPY','🇯🇵 日圓 JPY'], ['KRW','🇰🇷 韓元 KRW'],
   ['USD','🇺🇸 美金 USD'], ['EUR','🇪🇺 歐元 EUR'], ['CNY','🇨🇳 人民幣 CNY'],
@@ -357,6 +370,9 @@ let state = load();
 let route = { view: 'home' };            // {view:'home'} | {view:'plan', id}
 let expForm = null;                      // transient add-expense form state
 let expandedExps = new Set();            // ids of expenses with detail open
+let cloudSyncTimer = null;
+let pollTimer = null;
+let cloudSyncing = false;
 
 function load() {
   let s;
@@ -366,7 +382,180 @@ function load() {
   s.rates = s.rates || { anchor: 'TWD', updatedAt: null, source: null, values: { TWD: 1 } };
   return s;
 }
-function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+function cloudEnabled() { return !!SHEETS_API_URL; }
+
+function save(opts = {}) {
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  if (!cloudEnabled()) return;
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => cloudFlush(opts), 400);
+}
+
+async function cloudFlush(opts) {
+  if (!cloudEnabled() || cloudSyncing) return;
+  cloudSyncing = true;
+  setSyncBadge('busy', '同步中…');
+  try {
+    if (opts.deletePlanId) await apiPost({ action: 'deletePlan', id: opts.deletePlanId });
+    if (opts.rates) await apiPost({ action: 'saveRates', rates: state.rates });
+    const planId = opts.planId || (route.view === 'plan' ? route.id : null);
+    if (planId && !opts.deletePlanId) {
+      const p = getPlan(planId);
+      if (p) {
+        p.updatedAt = new Date().toISOString();
+        await apiPost({ action: 'savePlan', plan: p });
+      }
+    }
+    setSyncBadge('ok', '已同步 ☁️');
+  } catch (e) {
+    setSyncBadge('err', '同步失敗');
+    console.error(e);
+  } finally {
+    cloudSyncing = false;
+  }
+}
+
+async function apiGet(params) {
+  const q = new URLSearchParams({ ...params, _t: Date.now() });
+  const res = await fetch(`${SHEETS_API_URL}?${q}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'api error');
+  return data;
+}
+
+async function apiPost(body) {
+  const res = await fetch(SHEETS_API_URL, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'api error');
+  return data;
+}
+
+function setSyncBadge(kind, text) {
+  const el = document.getElementById('syncBadge');
+  if (!el) return;
+  el.className = 'sync-badge' + (kind === 'busy' ? ' busy' : kind === 'err' ? ' err' : '');
+  el.textContent = text;
+}
+
+function isEditingForm() {
+  const el = document.activeElement;
+  if (!el?.closest) return false;
+  return !!el.closest('#expDesc, #expAmount, #expRate, #newMemberName, [data-custom], #newPlanName');
+}
+
+function planShareUrl(planId) {
+  const u = new URL(location.href);
+  u.searchParams.set('plan', planId);
+  return u.toString();
+}
+
+async function cloudBootstrap() {
+  const [{ rates }, { plans: metas }] = await Promise.all([
+    apiGet({ action: 'rates' }),
+    apiGet({ action: 'list' }),
+  ]);
+  if (rates) state.rates = rates;
+  state.plans = [];
+  for (const m of metas) {
+    const { plan } = await apiGet({ action: 'plan', id: m.id });
+    if (plan) state.plans.push(plan);
+  }
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+}
+
+async function pollCloud() {
+  if (!cloudEnabled() || cloudSyncing) return;
+  try {
+    if (route.view === 'plan' && route.id) await pollPlan(route.id);
+    else if (route.view === 'home') await pollHome();
+    else if (route.view === 'rates') await pollRates();
+  } catch (e) { console.warn('poll', e); }
+}
+
+async function pollPlan(id) {
+  const { plan } = await apiGet({ action: 'plan', id });
+  if (!plan) return;
+  const local = getPlan(id);
+  if (local && (plan.updatedAt || '') <= (local.updatedAt || '')) return;
+  const idx = state.plans.findIndex(p => p.id === id);
+  if (idx >= 0) state.plans[idx] = plan;
+  else state.plans.unshift(plan);
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  if (isEditingForm()) return;
+  render();
+  setSyncBadge('ok', '已更新 🔄');
+}
+
+async function pollHome() {
+  const { plans: metas } = await apiGet({ action: 'list' });
+  let changed = false;
+  for (const m of metas) {
+    const local = getPlan(m.id);
+    if (local && (m.updatedAt || '') <= (local.updatedAt || '')) continue;
+    const { plan } = await apiGet({ action: 'plan', id: m.id });
+    if (!plan) continue;
+    const idx = state.plans.findIndex(p => p.id === plan.id);
+    if (idx >= 0) state.plans[idx] = plan;
+    else state.plans.unshift(plan);
+    changed = true;
+  }
+  if (changed) {
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    render();
+  }
+}
+
+async function pollRates() {
+  const { rates } = await apiGet({ action: 'rates' });
+  if (!rates) return;
+  const localAt = state.rates.updatedAt || '';
+  const remoteAt = rates.updatedAt || '';
+  if (remoteAt && remoteAt <= localAt) return;
+  state.rates = rates;
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  if (isEditingForm()) return;
+  render();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  if (!cloudEnabled()) return;
+  const ms = route.view === 'plan' ? POLL_PLAN_MS : POLL_HOME_MS;
+  pollTimer = setInterval(pollCloud, ms);
+}
+
+async function init() {
+  const urlPlan = new URLSearchParams(location.search).get('plan');
+  if (cloudEnabled()) {
+    setSyncBadge('busy', '載入中…');
+    try {
+      await cloudBootstrap();
+      if (urlPlan) {
+        let p = getPlan(urlPlan);
+        if (!p) {
+          const { plan } = await apiGet({ action: 'plan', id: urlPlan });
+          if (plan) { state.plans.unshift(plan); p = plan; localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+        }
+        if (p) route = { view: 'plan', id: urlPlan };
+        else toast('找不到這個計劃連結');
+      }
+      setSyncBadge('ok', '已連線 ☁️');
+    } catch (e) {
+      setSyncBadge('err', '雲端載入失敗');
+      toast('雲端載入失敗，先用本機資料');
+      if (urlPlan && getPlan(urlPlan)) route = { view: 'plan', id: urlPlan };
+    }
+    startPolling();
+  } else if (urlPlan && getPlan(urlPlan)) {
+    route = { view: 'plan', id: urlPlan };
+  }
+  render();
+}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -487,8 +676,9 @@ function addPlan() {
     emoji: PLAN_EMOJIS[Math.floor(Math.random() * PLAN_EMOJIS.length)],
     createdAt: today(),
     members: [], expenses: [],
+    updatedAt: new Date().toISOString(),
   });
-  save(); render();
+  save({ planId: state.plans[0].id }); render();
   toast(`計劃「${name}」建立好囉 🎉`);
 }
 
@@ -499,7 +689,7 @@ function deletePlan(id) {
     body: '計劃裡的成員與帳目會一起消失，這個動作無法復原喔。', okText: '刪除',
   }, () => {
     state.plans = state.plans.filter(x => x.id !== id);
-    save();
+    save({ deletePlanId: id });
     if (route.view === 'plan' && route.id === id) route = { view: 'home' };
     render();
     toast('計劃已刪除');
@@ -514,7 +704,7 @@ function closePlan(id) {
     okText: '結案！', danger: false,
   }, () => {
     p.closed = true; p.closedAt = today();
-    save(); render();
+    save({ planId: id }); render();
     toast('計劃已結案，辛苦大家了 🎊');
   });
 }
@@ -532,7 +722,7 @@ function addMember(planId) {
     expForm.participants.push(member.id);
     if (!expForm.payerId) expForm.payerId = member.id;
   }
-  save(); render();
+  save({ planId }); render();
   const again = document.getElementById('newMemberName');
   if (again) again.focus();
 }
@@ -548,7 +738,7 @@ function removeMember(planId, mid) {
     if (expForm.payerId === mid) expForm.payerId = p.members[0]?.id || '';
     delete expForm.customAmounts[mid];
   }
-  save(); render();
+  save({ planId }); render();
 }
 
 function deleteExpense(planId, eid) {
@@ -559,7 +749,7 @@ function deleteExpense(planId, eid) {
     emoji: '🧾', title: `刪除「${e.desc}」？`, body: '這筆帳會從結算中移除。', okText: '刪除',
   }, () => {
     p.expenses = p.expenses.filter(x => x.id !== eid);
-    save(); render();
+    save({ planId }); render();
   });
 }
 
@@ -567,14 +757,14 @@ function markSettled(planId, from, to, amount) {
   const p = getPlan(planId);
   p.settledPayments = p.settledPayments || [];
   p.settledPayments.unshift({ id: uid(), from, to, amount, date: today() });
-  save(); render();
+  save({ planId }); render();
   toast(`已記錄：${memberName(p, from)} 還給 ${memberName(p, to)} ${fmt(amount)} ${p.baseCurrency} ✓`);
 }
 
 function undoSettled(planId, spId) {
   const p = getPlan(planId);
   p.settledPayments = (p.settledPayments || []).filter(x => x.id !== spId);
-  save(); render();
+  save({ planId }); render();
   toast('已取消這筆結清紀錄');
 }
 
@@ -614,7 +804,7 @@ function submitExpense(planId) {
     date: today(),
   });
   expForm = blankExpForm(p);
-  save(); render();
+  save({ planId }); render();
   toast('記好這一筆了 🧾');
 }
 
@@ -626,6 +816,7 @@ function render() {
     route.view === 'rates' ? ratesView() :
     planView(getPlan(route.id));
   bindEvents();
+  if (cloudEnabled()) startPolling();
 }
 
 function ratesView() {
@@ -646,6 +837,7 @@ function ratesView() {
   <div class="topbar">
     <button class="btn btn-ghost btn-sm" id="btnRatesBack">← 返回</button>
     <h1>💱 匯率管理</h1>
+    ${cloudEnabled() ? '<span class="sync-badge" id="syncBadge">已連線 ☁️</span>' : ''}
     <button class="btn btn-primary btn-sm" id="btnFetchRates">🌐 抓取最新匯率</button>
   </div>
   <div class="card">
@@ -682,6 +874,16 @@ function homeView() {
     </div>`;
   }).join('');
 
+  const cloudCard = cloudEnabled() ? `
+  <div class="card cloud-setup">
+    <h2><span class="dot">☁️</span>雲端同步</h2>
+    <div class="ok-line">✅ 已連線 Google 試算表，每 ${POLL_HOME_MS / 1000} 秒自動刷新</div>
+    <div class="hint" style="margin-top:8px">進入計劃後按「🔗 分享」把連結傳給朋友，對方打開就能同步看到帳目。</div>
+    <div style="margin-top:12px; text-align:right">
+      <button class="btn btn-ghost btn-sm" id="btnCloudRefresh">🔄 立即刷新</button>
+    </div>
+  </div>` : '';
+
   return `
   <div class="hero">
     <div class="logo">🧈</div>
@@ -690,6 +892,8 @@ function homeView() {
       <p>跟朋友出去玩、聚餐、旅行，把帳記在這裡，最後一鍵算清 ✨</p>
     </div>
   </div>
+
+  ${cloudCard}
 
   <div class="card">
     <h2><span class="dot">🍯</span>開一個新計劃</h2>
@@ -881,6 +1085,8 @@ function planView(p) {
     <h1>${p.emoji} ${esc(p.name)}
       <span class="badge ${locked ? 'badge-closed' : 'badge-open'}">${locked ? '🔒 已結案' : '🌱 進行中'}</span>
     </h1>
+    ${cloudEnabled() ? '<span class="sync-badge" id="syncBadge">已連線 ☁️</span>' : ''}
+    <button class="btn btn-ghost btn-sm" id="btnShare" title="複製分享連結">🔗 分享</button>
     ${locked ? '' : `<button class="btn btn-primary btn-sm" id="btnClose">🔒 結案</button>`}
   </div>
   ${locked ? `<div class="closed-note">🔒 這個計劃已於 ${p.closedAt || ''} 結案，帳目只能查看、不能再更動囉。</div>` : ''}
@@ -973,7 +1179,7 @@ function bindEvents() {
       state.rates.values = { ...state.rates.values, ...values };
       state.rates.source = source;
       state.rates.updatedAt = nowStr();
-      save(); render();
+      save({ rates: true }); render();
       toast('最新匯率抓好了 🌐');
     } catch {
       btn.disabled = false; btn.textContent = '🌐 抓取最新匯率';
@@ -996,7 +1202,7 @@ function bindEvents() {
     }
     state.rates.anchor = newA;
     state.rates.updatedAt = nowStr();
-    save(); render();
+    save({ rates: true }); render();
   };
   document.querySelectorAll('[data-rate]').forEach(inp => inp.oninput = () => {
     const code = inp.dataset.rate;
@@ -1005,9 +1211,23 @@ function bindEvents() {
     else delete state.rates.values[code];
     state.rates.source = '✍️ 手動維護';
     state.rates.updatedAt = nowStr();
-    save();
+    save({ rates: true });
     const meta = document.getElementById('ratesMeta');
     if (meta) meta.textContent = `${state.rates.source}・${state.rates.updatedAt}`;
+  });
+
+  /* cloud */
+  on('btnCloudRefresh', async () => {
+    setSyncBadge('busy', '刷新中…');
+    try {
+      await cloudBootstrap();
+      setSyncBadge('ok', '已更新 🔄');
+      render();
+      toast('已從試算表刷新');
+    } catch (e) {
+      setSyncBadge('err', '刷新失敗');
+      toast('刷新失敗');
+    }
   });
 
   /* home */
@@ -1016,6 +1236,16 @@ function bindEvents() {
   if (npn) npn.onkeydown = e => { if (e.key === 'Enter') addPlan(); };
   document.querySelectorAll('[data-delplan]').forEach(b => b.onclick = e => { e.stopPropagation(); deletePlan(b.dataset.delplan); });
   document.querySelectorAll('[data-open]').forEach(c => c.onclick = () => { route = { view: 'plan', id: c.dataset.open }; expForm = null; expandedExps.clear(); render(); window.scrollTo(0, 0); });
+
+  on('btnShare', async () => {
+    const url = planShareUrl(route.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('分享連結已複製 📋');
+    } catch {
+      prompt('複製這個連結分享給朋友：', url);
+    }
+  });
 
   /* plan */
   on('btnBack', () => { route = { view: 'home' }; expForm = null; expandedExps.clear(); render(); window.scrollTo(0, 0); });
@@ -1045,7 +1275,7 @@ function bindEvents() {
     if (document.getElementById('expDesc')) syncExpFormFromDOM();
     const p = getPlan(route.id);
     p.balDisplayCur = balCurSel.value;
-    save(); render();
+    save({ planId: route.id }); render();
   };
   on('btnPickAll', () => {
     syncExpFormFromDOM();
@@ -1091,7 +1321,7 @@ function bindEvents() {
   if (rateInp) rateInp.oninput = refreshHints;
 }
 
-render();
+init();
 </script>
 </body>
 </html>
