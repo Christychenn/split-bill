@@ -8,7 +8,13 @@
  * 4. 部署 → 新增部署作業 → 類型選「網頁應用程式」
  *    - 執行身分：我
  *    - 誰可以存取：任何人
- * 5. 複製「網頁應用程式」URL，貼到 index.html 的同步設定裡
+ * 5. 專案設定（齒輪）→ 指令碼屬性 → 新增屬性 ACCESS_KEY，值填一組長的隨機字串
+ * 6. 用這個連結打開網站一次即可連線（網址與密碼只存在你的瀏覽器，不要寫進程式碼或 commit）：
+ *      https://<你的 GitHub Pages 網址>/#api=<網頁應用程式 URL>&key=<ACCESS_KEY>
+ *    之後在計劃裡按「分享」產生的連結也會帶上這組設定，朋友打開就能同步。
+ *
+ * 安全性：沒有正確 ACCESS_KEY 的請求一律拒絕。如果網址或密碼外流，
+ *   改掉 ACCESS_KEY（舊連結立即失效），或封存部署並重新部署取得新網址。
  *
  * 試算表會自動建立兩個工作表：
  *   plans — 每個分帳計劃一列（JSON）
@@ -46,10 +52,18 @@ function ensureSheets() {
   return { plans: plans, rates: rates };
 }
 
+// every request must carry the key stored in Script Properties
+function checkKey(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty('ACCESS_KEY');
+  if (!expected) throw new Error('ACCESS_KEY is not set in Script Properties');
+  if (!key || key !== expected) throw new Error('unauthorized');
+}
+
 function doGet(e) {
-  ensureSheets();
   var action = (e.parameter.action || '').toLowerCase();
   try {
+    checkKey(e.parameter.key);
+    ensureSheets();
     if (action === 'list') return jsonOut({ ok: true, plans: listPlans() });
     if (action === 'plan') return jsonOut({ ok: true, plan: getPlan(e.parameter.id) });
     if (action === 'rates') return jsonOut({ ok: true, rates: getRates() });
@@ -60,7 +74,6 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  ensureSheets();
   var body;
   try {
     body = JSON.parse(e.postData.contents);
@@ -68,6 +81,8 @@ function doPost(e) {
     return jsonOut({ ok: false, error: 'invalid json' });
   }
   try {
+    checkKey(body.key);
+    ensureSheets();
     var action = (body.action || '').toLowerCase();
     if (action === 'saveplan') {
       savePlan(body.plan);
