@@ -29,6 +29,8 @@
 
 透過 GitHub Pages 部署後，可直接用網址開啟，分享給朋友。
 
+範例展示：https://christychenn.github.io/split-bill/?demo （虛構資料，不會存到雲端）
+
 ## 技術
 
 純 HTML / CSS / JavaScript，無框架、無後端、無相依套件。

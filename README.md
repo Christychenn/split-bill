@@ -4,7 +4,8 @@
 
 **A multi-currency group expense splitter that turns a messy pile of shared receipts into the shortest possible list of "who pays whom."**
 
-🔗 **Live demo:** https://christychenn.github.io/split-bill/
+🔗 **Live demo:** https://christychenn.github.io/split-bill/?demo  
+*(demo mode: fictional sample data, nothing is saved to the cloud)*
 🌐 Interface language: Traditional Chinese
 
 ---
@@ -53,7 +54,7 @@ I built Butter Split to practice turning that domain knowledge into working soft
 
 This is the same debt-simplification idea popularized by apps like Splitwise. For a group of *n* people it never needs more than *n − 1* transfers, regardless of how many expenses were recorded.
 
-**Example:** four friends record 15 shared expenses during a trip to Japan. Paying each one back individually could take dozens of transfers; Butter Split reduces it to at most three.
+**Example (from the demo):** four friends record 7 shared expenses in Tokyo, paid by different people, in JPY and TWD, some split equally and some by custom amounts. Butter Split reduces everything to just 3 transfers.
 
 ## Architecture
 

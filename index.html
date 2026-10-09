@@ -353,9 +353,11 @@
 'use strict';
 
 /* ───────────────────────── state ───────────────────────── */
-const LS_KEY = 'butter-split-v1';
+// Demo mode (?demo): sample data only, never touches the cloud sheet or real local data
+const DEMO = new URLSearchParams(location.search).has('demo');
+const LS_KEY = DEMO ? 'butter-split-demo' : 'butter-split-v1';
 // ← 部署 Apps Script 後，把「網頁應用程式」URL 貼在這裡（朋友不用設定，開分享連結即可）
-const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyr_akY6mF_3MrwjKJKd3cXTFQQ6k0fhbp7R6772pOYHKd-45fKyqpRW5wBbR8gI8jc/exec';
+const SHEETS_API_URL = DEMO ? '' : 'https://script.google.com/macros/s/AKfycbyr_akY6mF_3MrwjKJKd3cXTFQQ6k0fhbp7R6772pOYHKd-45fKyqpRW5wBbR8gI8jc/exec';
 const POLL_PLAN_MS = 4000;
 const POLL_HOME_MS = 6000;
 const CURRENCIES = [
@@ -380,7 +382,50 @@ function load() {
   s.plans = s.plans || [];
   // global exchange rates, shared by every plan: 1 unit of currency = values[code] units of anchor
   s.rates = s.rates || { anchor: 'TWD', updatedAt: null, source: null, values: { TWD: 1 } };
+  if (DEMO && s.plans.length === 0) Object.assign(s, demoState());
   return s;
+}
+
+// fictional sample data shown in demo mode
+function demoState() {
+  const m = (id, name) => ({ id, name });
+  const e = (id, desc, amount, currency, rate, payerId, participants, extra = {}) => ({
+    id, desc, amount, currency, rate, payerId, participants,
+    splitType: 'equal', customAmounts: {}, date: '2026-04-0' + (1 + (id.length % 5)), ...extra,
+  });
+  const T = ['a', 'b', 'c', 'd'];
+  return {
+    rates: { anchor: 'TWD', updatedAt: '2026-04-01 09:00', source: '✏️ sample',
+      values: { TWD: 1, JPY: 0.21, KRW: 0.023, USD: 32.5 } },
+    plans: [
+      {
+        id: 'demo-tokyo', name: 'Tokyo Spring Trip', emoji: '🍰', baseCurrency: 'TWD',
+        closed: false, createdAt: '2026-04-01', updatedAt: '2026-04-05T12:00:00.000Z',
+        members: [m('a', 'Amy'), m('b', 'Ben'), m('c', 'Cleo'), m('d', 'Dan')],
+        expenses: [
+          e('e1', 'Airport limousine bus', 12800, 'JPY', 0.21, 'a', T),
+          e('e2', 'Hotel (3 nights)', 96000, 'JPY', 0.21, 'b', T),
+          e('e3', 'Sushi dinner', 28400, 'JPY', 0.21, 'c', T),
+          e('e4', 'Disney tickets', 37600, 'JPY', 0.21, 'd', ['a', 'b', 'd']),
+          e('e5', 'Convenience store snacks', 3200, 'JPY', 0.21, 'a', ['a', 'c']),
+          e('e6', 'Pocket Wi-Fi rental', 1200, 'TWD', 1, 'c', T),
+          e('e7', 'Izakaya night', 18000, 'JPY', 0.21, 'b', T, {
+            splitType: 'custom', customAmounts: { a: 3000, b: 6000, c: 3000, d: 6000 } }),
+        ],
+        settledPayments: [],
+      },
+      {
+        id: 'demo-seoul', name: 'Seoul Weekend', emoji: '🧇', baseCurrency: 'TWD',
+        closed: true, closedAt: '2026-03-10', createdAt: '2026-03-06', updatedAt: '2026-03-10T08:00:00.000Z',
+        members: [m('a', 'Amy'), m('c', 'Cleo')],
+        expenses: [
+          e('k1', 'Guesthouse', 180000, 'KRW', 0.023, 'a', ['a', 'c']),
+          e('k2', 'Korean BBQ', 64000, 'KRW', 0.023, 'c', ['a', 'c']),
+        ],
+        settledPayments: [{ id: 'sp1', from: 'c', to: 'a', amount: 1334, date: '2026-03-10' }],
+      },
+    ],
+  };
 }
 
 function cloudEnabled() { return !!SHEETS_API_URL; }
@@ -892,6 +937,8 @@ function homeView() {
       <p>跟朋友出去玩、聚餐、旅行，把帳記在這裡，最後一鍵算清 ✨</p>
     </div>
   </div>
+  ${DEMO ? `<div class="card cloud-setup" style="margin-bottom:16px">🧪 <b>Demo mode</b> — fictional sample data. Changes stay in your browser only.
+    <button class="btn btn-ghost" style="margin-left:8px" onclick="localStorage.removeItem(LS_KEY);location.reload()">Reset demo</button></div>` : ''}
 
   ${cloudCard}
 
