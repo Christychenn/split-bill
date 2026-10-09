@@ -356,8 +356,29 @@
 // Demo mode (?demo): sample data only, never touches the cloud sheet or real local data
 const DEMO = new URLSearchParams(location.search).has('demo');
 const LS_KEY = DEMO ? 'butter-split-demo' : 'butter-split-v1';
-// ← 部署 Apps Script 後，把「網頁應用程式」URL 貼在這裡（朋友不用設定，開分享連結即可）
-const SHEETS_API_URL = DEMO ? '' : 'https://script.google.com/macros/s/AKfycbyr_akY6mF_3MrwjKJKd3cXTFQQ6k0fhbp7R6772pOYHKd-45fKyqpRW5wBbR8gI8jc/exec';
+// Cloud config is NEVER hard-coded: it arrives once via a link fragment
+// (#api=<Apps Script URL>&key=<access key>) and is kept in this browser only.
+const CFG_KEY = 'butter-split-cloud';
+const CLOUD = DEMO ? null : loadCloudConfig();
+const SHEETS_API_URL = CLOUD ? CLOUD.api : '';
+const SHEETS_KEY = CLOUD ? CLOUD.key : '';
+function validApiUrl(u) { return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u || ''); }
+function loadCloudConfig() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('api')) {
+    // drop the secret from the address bar so it isn't copied or screenshotted by accident
+    history.replaceState(null, '', location.pathname + location.search);
+    if (validApiUrl(h.get('api'))) {
+      const cfg = { api: h.get('api'), key: h.get('key') || '' };
+      try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch {}
+      return cfg;
+    }
+  }
+  try {
+    const cfg = JSON.parse(localStorage.getItem(CFG_KEY));
+    return cfg && validApiUrl(cfg.api) ? cfg : null;
+  } catch { return null; }
+}
 const POLL_PLAN_MS = 4000;
 const POLL_HOME_MS = 6000;
 const CURRENCIES = [
@@ -462,7 +483,7 @@ async function cloudFlush(opts) {
 }
 
 async function apiGet(params) {
-  const q = new URLSearchParams({ ...params, _t: Date.now() });
+  const q = new URLSearchParams({ ...params, key: SHEETS_KEY, _t: Date.now() });
   const res = await fetch(`${SHEETS_API_URL}?${q}`);
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'api error');
@@ -472,7 +493,7 @@ async function apiGet(params) {
 async function apiPost(body) {
   const res = await fetch(SHEETS_API_URL, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, key: SHEETS_KEY }),
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
   });
   const data = await res.json();
@@ -496,6 +517,8 @@ function isEditingForm() {
 function planShareUrl(planId) {
   const u = new URL(location.href);
   u.searchParams.set('plan', planId);
+  u.hash = '';
+  if (cloudEnabled()) u.hash = new URLSearchParams({ api: SHEETS_API_URL, key: SHEETS_KEY }).toString();
   return u.toString();
 }
 
@@ -925,6 +948,7 @@ function homeView() {
     <div class="ok-line">✅ 已連線 Google 試算表，每 ${POLL_HOME_MS / 1000} 秒自動刷新</div>
     <div class="hint" style="margin-top:8px">進入計劃後按「🔗 分享」把連結傳給朋友，對方打開就能同步看到帳目。</div>
     <div style="margin-top:12px; text-align:right">
+      <button class="btn btn-ghost btn-sm" id="btnCloudOff">⛓️‍💥 這台裝置中斷連線</button>
       <button class="btn btn-ghost btn-sm" id="btnCloudRefresh">🔄 立即刷新</button>
     </div>
   </div>` : '';
@@ -1283,6 +1307,11 @@ function bindEvents() {
   if (npn) npn.onkeydown = e => { if (e.key === 'Enter') addPlan(); };
   document.querySelectorAll('[data-delplan]').forEach(b => b.onclick = e => { e.stopPropagation(); deletePlan(b.dataset.delplan); });
   document.querySelectorAll('[data-open]').forEach(c => c.onclick = () => { route = { view: 'plan', id: c.dataset.open }; expForm = null; expandedExps.clear(); render(); window.scrollTo(0, 0); });
+
+  on('btnCloudOff', () => confirmBox({
+    emoji: '⛓️‍💥', title: '這台裝置中斷雲端連線？',
+    body: '會清除這個瀏覽器記住的雲端設定與本機快取，雲端資料不受影響。要重新連線，再打開一次分享連結即可。', okText: '中斷連線',
+  }, () => { try { localStorage.removeItem(CFG_KEY); localStorage.removeItem(LS_KEY); } catch {} location.reload(); }));
 
   on('btnShare', async () => {
     const url = planShareUrl(route.id);

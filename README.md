@@ -73,6 +73,7 @@ This is the same debt-simplification idea popularized by apps like Splitwise. Fo
 
 - **Frontend:** a single `index.html` with no frameworks, build step, or dependencies.
 - **Backend:** a lightweight Google Apps Script web app (`google-apps-script/Code.gs`) that exposes a small JSON API and uses a Google Sheet as its database.
+- **Access control:** the backend URL is never committed; it reaches each browser through the share link, and every request must carry an access key stored in Apps Script's Script Properties.
 - **Sync:** changes are saved locally first, then pushed to the cloud (debounced). Each client polls for newer versions using `updatedAt` timestamps, and skips re-rendering while the user is typing so edits aren't interrupted.
 - **Offline fallback:** if the cloud can't be reached, the app keeps working from browser storage.
 - **Exchange rates:** live rates come from the free [open.er-api.com](https://open.er-api.com) API; the provider is isolated in one function so it can be swapped easily.
@@ -86,8 +87,9 @@ This is the same debt-simplification idea popularized by apps like Splitwise. Fo
 
 1. Create a new Google Sheet and open **Extensions → Apps Script**.
 2. Paste in `google-apps-script/Code.gs` and deploy it as a **Web app** (execute as: me; access: anyone).
-3. Copy the web-app URL into the `SHEETS_API_URL` constant in `index.html`.
-4. Open a plan and click **🔗 分享 (Share)** to send the link to friends.
+3. In **Project Settings → Script Properties**, add `ACCESS_KEY` with a long random value.
+4. Open the site once with `#api=<web-app URL>&key=<ACCESS_KEY>` appended to the address. The browser remembers it; the URL and key are never committed to this repository.
+5. Open a plan and click **🔗 分享 (Share)**: the generated link carries the connection, so friends need no setup.
 
 ## Repository structure
 
@@ -106,6 +108,7 @@ split-bill/
 - **Building a backend without a server:** using Google Apps Script and Sheets as a free, zero-maintenance API and database.
 - **Collaborative state:** keeping several people's views in sync with simple polling and timestamp-based conflict handling.
 - **Shipping:** setting up continuous deployment so every change goes live automatically.
+- **Security in public code:** my first version hard-coded the backend URL in this public repo, which meant anyone could read the data behind it. I revoked that deployment, moved the URL out of the code into the share link, added an access key checked on the server, and built a demo mode with fictional data for the public page. Lesson: anything that grants access to data is a credential, and a leaked credential must be rotated, not just deleted.
 
 ## Possible next steps
 
